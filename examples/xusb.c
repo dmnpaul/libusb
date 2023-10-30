@@ -68,8 +68,6 @@ static void perr(char const *format, ...)
 #define B(x) (((x)!=0)?1:0)
 #define be_to_int32(buf) (((buf)[0]<<24)|((buf)[1]<<16)|((buf)[2]<<8)|(buf)[3])
 
-#define RETRY_MAX                     5
-#define REQUEST_SENSE_LENGTH          0x12
 #define INQUIRY_LENGTH                0x24
 #define READ_CAPACITY_LENGTH          0x08
 
@@ -96,45 +94,6 @@ static const uint8_t ms_os_desc_string[] = {
 	MS_OS_DESC_STRING_LENGTH,
 	LIBUSB_DT_STRING,
 	'M', 0, 'S', 0, 'F', 0, 'T', 0, '1', 0, '0', 0, '0', 0,
-};
-
-// Section 5.1: Command Block Wrapper (CBW)
-struct command_block_wrapper {
-	uint8_t dCBWSignature[4];
-	uint32_t dCBWTag;
-	uint32_t dCBWDataTransferLength;
-	uint8_t bmCBWFlags;
-	uint8_t bCBWLUN;
-	uint8_t bCBWCBLength;
-	uint8_t CBWCB[16];
-};
-
-// Section 5.2: Command Status Wrapper (CSW)
-struct command_status_wrapper {
-	uint8_t dCSWSignature[4];
-	uint32_t dCSWTag;
-	uint32_t dCSWDataResidue;
-	uint8_t bCSWStatus;
-};
-
-static const uint8_t cdb_length[256] = {
-//	 0  1  2  3  4  5  6  7  8  9  A  B  C  D  E  F
-	06,06,06,06,06,06,06,06,06,06,06,06,06,06,06,06,  //  0
-	06,06,06,06,06,06,06,06,06,06,06,06,06,06,06,06,  //  1
-	10,10,10,10,10,10,10,10,10,10,10,10,10,10,10,10,  //  2
-	10,10,10,10,10,10,10,10,10,10,10,10,10,10,10,10,  //  3
-	10,10,10,10,10,10,10,10,10,10,10,10,10,10,10,10,  //  4
-	10,10,10,10,10,10,10,10,10,10,10,10,10,10,10,10,  //  5
-	00,00,00,00,00,00,00,00,00,00,00,00,00,00,00,00,  //  6
-	00,00,00,00,00,00,00,00,00,00,00,00,00,00,00,00,  //  7
-	16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,  //  8
-	16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,  //  9
-	12,12,12,12,12,12,12,12,12,12,12,12,12,12,12,12,  //  A
-	12,12,12,12,12,12,12,12,12,12,12,12,12,12,12,12,  //  B
-	00,00,00,00,00,00,00,00,00,00,00,00,00,00,00,00,  //  C
-	00,00,00,00,00,00,00,00,00,00,00,00,00,00,00,00,  //  D
-	00,00,00,00,00,00,00,00,00,00,00,00,00,00,00,00,  //  E
-	00,00,00,00,00,00,00,00,00,00,00,00,00,00,00,00,  //  F
 };
 
 static enum test_type {
@@ -313,144 +272,6 @@ static int set_xbox_actuators(libusb_device_handle *handle, uint8_t left, uint8_
 	return 0;
 }
 
-static int send_mass_storage_command(libusb_device_handle *handle, uint8_t endpoint, uint8_t lun,
-	uint8_t *cdb, uint8_t direction, int data_length, uint32_t *ret_tag)
-{
-	static uint32_t tag = 1;
-	uint8_t cdb_len;
-	int i, r, size;
-	struct command_block_wrapper cbw;
-
-	if (cdb == NULL) {
-		return -1;
-	}
-
-	if (endpoint & LIBUSB_ENDPOINT_IN) {
-		perr("send_mass_storage_command: cannot send command on IN endpoint\n");
-		return -1;
-	}
-
-	cdb_len = cdb_length[cdb[0]];
-	if ((cdb_len == 0) || (cdb_len > sizeof(cbw.CBWCB))) {
-		perr("send_mass_storage_command: don't know how to handle this command (%02X, length %d)\n",
-			cdb[0], cdb_len);
-		return -1;
-	}
-
-	memset(&cbw, 0, sizeof(cbw));
-	cbw.dCBWSignature[0] = 'U';
-	cbw.dCBWSignature[1] = 'S';
-	cbw.dCBWSignature[2] = 'B';
-	cbw.dCBWSignature[3] = 'C';
-	*ret_tag = tag;
-	cbw.dCBWTag = tag++;
-	cbw.dCBWDataTransferLength = data_length;
-	cbw.bmCBWFlags = direction;
-	cbw.bCBWLUN = lun;
-	// Subclass is 1 or 6 => cdb_len
-	cbw.bCBWCBLength = cdb_len;
-	memcpy(cbw.CBWCB, cdb, cdb_len);
-
-	i = 0;
-	do {
-		// The transfer length must always be exactly 31 bytes.
-		r = libusb_bulk_transfer(handle, endpoint, (unsigned char*)&cbw, 31, &size, 1000);
-		if (r == LIBUSB_ERROR_PIPE) {
-			libusb_clear_halt(handle, endpoint);
-		}
-		i++;
-	} while ((r == LIBUSB_ERROR_PIPE) && (i<RETRY_MAX));
-	if (r != LIBUSB_SUCCESS) {
-		perr("   send_mass_storage_command: %s\n", libusb_strerror((enum libusb_error)r));
-		return -1;
-	}
-
-	printf("   sent %d CDB bytes\n", cdb_len);
-	return 0;
-}
-
-static int get_mass_storage_status(libusb_device_handle *handle, uint8_t endpoint, uint32_t expected_tag)
-{
-	int i, r, size;
-	struct command_status_wrapper csw;
-
-	// The device is allowed to STALL this transfer. If it does, you have to
-	// clear the stall and try again.
-	i = 0;
-	do {
-		r = libusb_bulk_transfer(handle, endpoint, (unsigned char*)&csw, 13, &size, 1000);
-		if (r == LIBUSB_ERROR_PIPE) {
-			libusb_clear_halt(handle, endpoint);
-		}
-		i++;
-	} while ((r == LIBUSB_ERROR_PIPE) && (i<RETRY_MAX));
-	if (r != LIBUSB_SUCCESS) {
-		perr("   get_mass_storage_status: %s\n", libusb_strerror((enum libusb_error)r));
-		return -1;
-	}
-	if (size != 13) {
-		perr("   get_mass_storage_status: received %d bytes (expected 13)\n", size);
-		return -1;
-	}
-	if (csw.dCSWTag != expected_tag) {
-		perr("   get_mass_storage_status: mismatched tags (expected %08X, received %08X)\n",
-			expected_tag, csw.dCSWTag);
-		return -1;
-	}
-	// For this test, we ignore the dCSWSignature check for validity...
-	printf("   Mass Storage Status: %02X (%s)\n", csw.bCSWStatus, csw.bCSWStatus?"FAILED":"Success");
-	if (csw.dCSWTag != expected_tag)
-		return -1;
-	if (csw.bCSWStatus) {
-		// REQUEST SENSE is appropriate only if bCSWStatus is 1, meaning that the
-		// command failed somehow.  Larger values (2 in particular) mean that
-		// the command couldn't be understood.
-		if (csw.bCSWStatus == 1)
-			return -2;	// request Get Sense
-		else
-			return -1;
-	}
-
-	// In theory we also should check dCSWDataResidue.  But lots of devices
-	// set it wrongly.
-	return 0;
-}
-
-static void get_sense(libusb_device_handle *handle, uint8_t endpoint_in, uint8_t endpoint_out)
-{
-	uint8_t cdb[16];	// SCSI Command Descriptor Block
-	uint8_t sense[18];
-	uint32_t expected_tag;
-	int size;
-	int rc;
-
-	// Request Sense
-	printf("Request Sense:\n");
-	memset(sense, 0, sizeof(sense));
-	memset(cdb, 0, sizeof(cdb));
-	cdb[0] = 0x03;	// Request Sense
-	cdb[4] = REQUEST_SENSE_LENGTH;
-
-	send_mass_storage_command(handle, endpoint_out, 0, cdb, LIBUSB_ENDPOINT_IN, REQUEST_SENSE_LENGTH, &expected_tag);
-	rc = libusb_bulk_transfer(handle, endpoint_in, (unsigned char*)&sense, REQUEST_SENSE_LENGTH, &size, 1000);
-	if (rc < 0)
-	{
-		printf("libusb_bulk_transfer failed: %s\n", libusb_error_name(rc));
-		return;
-	}
-	printf("   received %d bytes\n", size);
-
-	if ((sense[0] != 0x70) && (sense[0] != 0x71)) {
-		perr("   ERROR No sense data\n");
-	} else {
-		perr("   ERROR Sense: %02X %02X %02X\n", sense[2]&0x0F, sense[12], sense[13]);
-	}
-	// Strictly speaking, the get_mass_storage_status() call should come
-	// before these perr() lines.  If the status is nonzero then we must
-	// assume there's no data in the buffer.  For xusb it doesn't matter.
-	get_mass_storage_status(handle, endpoint_in, expected_tag);
-}
-
 // Mass Storage device to test bulk transfers (non destructive test)
 static int test_mass_storage(libusb_device_handle *handle, uint8_t endpoint_in, uint8_t endpoint_out)
 {
@@ -464,6 +285,8 @@ static int test_mass_storage(libusb_device_handle *handle, uint8_t endpoint_in, 
 	char vid[9], pid[9], rev[5];
 	unsigned char *data;
 	FILE *fd;
+	uint8_t should_request_sense;
+	uint8_t sense[18];
 
 	printf("\nReading Max LUN:\n");
 	r = libusb_control_transfer(handle, LIBUSB_ENDPOINT_IN|LIBUSB_REQUEST_TYPE_CLASS|LIBUSB_RECIPIENT_INTERFACE,
@@ -487,7 +310,7 @@ static int test_mass_storage(libusb_device_handle *handle, uint8_t endpoint_in, 
 	cdb[0] = 0x12;	// Inquiry
 	cdb[4] = INQUIRY_LENGTH;
 
-	send_mass_storage_command(handle, endpoint_out, lun, cdb, LIBUSB_ENDPOINT_IN, INQUIRY_LENGTH, &expected_tag);
+	libusb_boms_send_command(handle, endpoint_out, lun, cdb, LIBUSB_ENDPOINT_IN, INQUIRY_LENGTH, &expected_tag, 0);
 	CALL_CHECK(libusb_bulk_transfer(handle, endpoint_in, (unsigned char*)&buffer, INQUIRY_LENGTH, &size, 1000));
 	printf("   received %d bytes\n", size);
 	// The following strings are not zero terminated
@@ -499,9 +322,11 @@ static int test_mass_storage(libusb_device_handle *handle, uint8_t endpoint_in, 
 	vid[8] = 0;
 	pid[8] = 0;
 	rev[4] = 0;
+	should_request_sense = 0;
 	printf("   VID:PID:REV \"%8s\":\"%8s\":\"%4s\"\n", vid, pid, rev);
-	if (get_mass_storage_status(handle, endpoint_in, expected_tag) == -2) {
-		get_sense(handle, endpoint_in, endpoint_out);
+	libusb_boms_get_status(handle, endpoint_in, expected_tag, &should_request_sense);
+	if (should_request_sense) {
+		libusb_boms_get_sense(handle, endpoint_in, endpoint_out, sense);
 	}
 
 	// Read capacity
@@ -510,15 +335,17 @@ static int test_mass_storage(libusb_device_handle *handle, uint8_t endpoint_in, 
 	memset(cdb, 0, sizeof(cdb));
 	cdb[0] = 0x25;	// Read Capacity
 
-	send_mass_storage_command(handle, endpoint_out, lun, cdb, LIBUSB_ENDPOINT_IN, READ_CAPACITY_LENGTH, &expected_tag);
+	libusb_boms_send_command(handle, endpoint_out, lun, cdb, LIBUSB_ENDPOINT_IN, READ_CAPACITY_LENGTH, &expected_tag, 0);
 	CALL_CHECK(libusb_bulk_transfer(handle, endpoint_in, (unsigned char*)&buffer, READ_CAPACITY_LENGTH, &size, 1000));
 	printf("   received %d bytes\n", size);
 	max_lba = be_to_int32(&buffer[0]);
 	block_size = be_to_int32(&buffer[4]);
 	device_size = ((double)(max_lba+1))*block_size/(1024*1024*1024);
+	should_request_sense = 0;
 	printf("   Max LBA: %08X, Block Size: %08X (%.2f GB)\n", max_lba, block_size, device_size);
-	if (get_mass_storage_status(handle, endpoint_in, expected_tag) == -2) {
-		get_sense(handle, endpoint_in, endpoint_out);
+	libusb_boms_get_status(handle, endpoint_in, expected_tag, &should_request_sense);
+	if (should_request_sense) {
+		libusb_boms_get_sense(handle, endpoint_in, endpoint_out, sense);
 	}
 
 	// coverity[tainted_data]
@@ -534,13 +361,12 @@ static int test_mass_storage(libusb_device_handle *handle, uint8_t endpoint_in, 
 
 	cdb[0] = 0x28;	// Read(10)
 	cdb[8] = 0x01;	// 1 block
+	should_request_sense = 0;
 
-	send_mass_storage_command(handle, endpoint_out, lun, cdb, LIBUSB_ENDPOINT_IN, block_size, &expected_tag);
+	libusb_boms_send_command(handle, endpoint_out, lun, cdb, LIBUSB_ENDPOINT_IN, block_size, &expected_tag, 0);
 	libusb_bulk_transfer(handle, endpoint_in, data, block_size, &size, 5000);
 	printf("   READ: received %d bytes\n", size);
-	if (get_mass_storage_status(handle, endpoint_in, expected_tag) == -2) {
-		get_sense(handle, endpoint_in, endpoint_out);
-	} else {
+	if (LIBUSB_SUCCESS == libusb_boms_get_status(handle, endpoint_in, expected_tag, &should_request_sense)) {
 		display_buffer_hex(data, size);
 		if ((binary_dump) && ((fd = fopen(binary_name, "w")) != NULL)) {
 			if (fwrite(data, 1, (size_t)size, fd) != (unsigned int)size) {
@@ -548,6 +374,8 @@ static int test_mass_storage(libusb_device_handle *handle, uint8_t endpoint_in, 
 			}
 			fclose(fd);
 		}
+	} else if (should_request_sense) {
+		libusb_boms_get_sense(handle, endpoint_in, endpoint_out, sense);
 	}
 	free(data);
 

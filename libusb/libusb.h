@@ -2303,6 +2303,19 @@ void * LIBUSB_CALL libusb_hotplug_get_user_data(libusb_context *ctx,
 
 int LIBUSB_CALLV libusb_set_option(libusb_context *ctx, enum libusb_option option, ...);
 
+
+// TODO: Paul Lebedev: add documentation comments
+
+int LIBUSB_CALL libusb_boms_send_command(libusb_device_handle *handle,
+	uint8_t endpoint, uint8_t lun, uint8_t *cdb, uint8_t direction,
+	int data_length, uint32_t *ret_tag, uint8_t cdb_len);
+int LIBUSB_CALL libusb_boms_get_status(libusb_device_handle *handle,
+	uint8_t endpoint, uint32_t expected_tag, uint8_t* should_request_sence);
+int LIBUSB_CALL libusb_boms_get_sense(libusb_device_handle *handle,
+	uint8_t endpoint_in, uint8_t endpoint_out, uint8_t* sense);
+
+
+
 #ifdef _MSC_VER
 #pragma warning(pop)
 #endif
