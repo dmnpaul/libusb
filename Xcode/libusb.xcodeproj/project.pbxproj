@@ -91,6 +91,7 @@
 		CEA0F60626321FAA00ADF3EC /* libusb.h in Headers */ = {isa = PBXBuildFile; fileRef = 008FBF5A1628B7E800BC5BE2 /* libusb.h */; };
 		CEA0F60726321FAA00ADF3EC /* libusb-1.0.0.dylib in Frameworks */ = {isa = PBXBuildFile; fileRef = 008FBF311628B79300BC5BE2 /* libusb-1.0.0.dylib */; };
 		CEA45DFB2634CDFA002FA97D /* Security.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = CEDCEA6E2632200A00F7AA49 /* Security.framework */; };
+		E6667B732AED1CFD005048D0 /* boms.c in Sources */ = {isa = PBXBuildFile; fileRef = E6667B722AED1CFD005048D0 /* boms.c */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -279,6 +280,7 @@
 		20468D75243298D300650534 /* testlibusb */ = {isa = PBXFileReference; explicitFileType = "compiled.mach-o.executable"; includeInIndex = 0; path = testlibusb; sourceTree = BUILT_PRODUCTS_DIR; };
 		20468D7C2432990000650534 /* testlibusb.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; path = testlibusb.c; sourceTree = "<group>"; usesTabs = 1; };
 		CEDCEA6E2632200A00F7AA49 /* Security.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Security.framework; path = System/Library/Frameworks/Security.framework; sourceTree = SDKROOT; };
+		E6667B722AED1CFD005048D0 /* boms.c */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.c; path = boms.c; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -423,6 +425,7 @@
 				008FBF7A1628B7E800BC5BE2 /* sync.c */,
 				008FBF7B1628B7E800BC5BE2 /* version.h */,
 				008FBF7C1628B7E800BC5BE2 /* version_nano.h */,
+				E6667B722AED1CFD005048D0 /* boms.c */,
 			);
 			name = libusb;
 			path = ../libusb;
@@ -840,6 +843,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				E6667B732AED1CFD005048D0 /* boms.c in Sources */,
 				008FBF861628B7E800BC5BE2 /* core.c in Sources */,
 				008FBF921628B7E800BC5BE2 /* darwin_usb.c in Sources */,
 				008FBF871628B7E800BC5BE2 /* descriptor.c in Sources */,
@@ -1061,7 +1065,8 @@
 				ENABLE_TESTABILITY = YES;
 				GCC_NO_COMMON_BLOCKS = YES;
 				GCC_WARN_UNDECLARED_SELECTOR = YES;
-				ONLY_ACTIVE_ARCH = YES;
+				MACOSX_DEPLOYMENT_TARGET = 10.9;
+				ONLY_ACTIVE_ARCH = NO;
 			};
 			name = Debug;
 		};
@@ -1079,6 +1084,7 @@
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
 				GCC_NO_COMMON_BLOCKS = YES;
 				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				MACOSX_DEPLOYMENT_TARGET = 10.9;
 			};
 			name = Release;
 		};
